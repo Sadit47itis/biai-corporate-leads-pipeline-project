@@ -132,8 +132,14 @@ if draft is not None:
         reason = ui.esc(draft[len("HOLD:"):].strip()).replace("\n", "<br>")
         st.markdown(f'<div class="hold"><b>On hold. Do not send yet.</b><br>{reason}</div>',
                     unsafe_allow_html=True)
-    if draft_key not in st.session_state:
-        st.session_state[draft_key] = draft
-    st.text_area("Draft (editable)", key=draft_key, height=280, on_change=_save_edit)
+    else:
+        if "NOTE:" in draft:
+            body, note = draft.split("NOTE:", 1)
+            draft = body.strip()
+            st.warning(f"**ACTION REQUIRED:** {note.strip()}")
+        
+        if draft_key not in st.session_state:
+            st.session_state[draft_key] = draft
+        st.text_area("Draft (editable)", key=draft_key, height=280, on_change=_save_edit)
 else:
     st.caption("No draft yet. Click the button to generate one.")

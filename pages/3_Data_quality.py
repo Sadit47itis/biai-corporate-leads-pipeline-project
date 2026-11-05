@@ -25,6 +25,7 @@ c1, c2, c3 = st.columns(3)
 c1.metric("Hard issues (counted in scorecard)", len(hard), help="Issue rows across the 6 hard types.")
 c2.metric("Leads with a hard issue", hard["lead_id"].nunique())
 c3.metric("Watch items (not counted)", len(watch))
+st.caption(f"{len(hard)} issues across {hard['lead_id'].nunique()} leads")
 
 # ---- how duplicates and the date error were handled --------------------------
 with st.expander("How I handled duplicates and the date error", expanded=True):

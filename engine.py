@@ -266,9 +266,10 @@ def analyze(df: pd.DataFrame, today=TODAY):
     # ---- WATCH 7: payment_check ------------------------------------------
     for pos, r in enumerate(d.itertuples()):
         if r.stage == "Invoice sent" and _PAYMENT_CHECK_RE.search(notes.iloc[pos]):
+            fix_msg = "Ask whether the advance has arrived." if "advance" in notes.iloc[pos].lower() else "Check the bank statement before chasing the client."
             add(r.lead_id, "payment_check", "low",
                 "Invoice sent and notes ask to verify payment.",
-                "Check the bank statement before chasing the client.")
+                fix_msg)
 
     # ---- WATCH 8: going_cold ---------------------------------------------
     for r in d[d["is_going_cold"]].itertuples():

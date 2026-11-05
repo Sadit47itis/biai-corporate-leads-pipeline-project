@@ -12,6 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ai  # noqa: E402
 import engine  # noqa: E402
 
+CHASE_FIRST = ["L10", "L22", "L19", "L15", "L25"]   # overdue, by deal value then days overdue
+OK_EMAIL = "test@example.com"
+
 
 class FakeClient:
     """Pops scripted replies (str -> reply text, Exception -> raised) and records every call."""
@@ -74,7 +77,8 @@ def test_email_uses_verbatim_prompt_and_only_listed_fields(fake):
     call = client.calls[0]
     assert call["model"] == "openai/gpt-oss-120b"
     assert call["messages"][0] == {"role": "system", "content": ai.EMAIL_SYSTEM_PROMPT}
-    for phrase in ("70-120 words", "signed 'BIAI Team'", "HOLD rule", "starting with 'NOTE:'", "No markdown."):
+    for phrase in ("70-120 words", "signed 'BIAI Team'", "HOLD rule", "starting with 'NOTE:'", "No markdown.",
+                   "Never state dates"):
         assert phrase in ai.EMAIL_SYSTEM_PROMPT
     user = call["messages"][1]["content"]
     assert "secret@x.example" not in user and "01819-200102" not in user
@@ -91,15 +95,42 @@ def test_lost_and_duplicate_leads_are_held_without_calling_the_model(fake):
     assert client.calls == []
 
 
+def test_missing_email_is_held_with_phone_and_no_model_call(fake):
+    client = fake([])
+    out = ai.draft_email({"stage": "New", "contact_phone": "01555-200124"})
+    assert out == "HOLD: No email address on file. Call 01555-200124 instead."
+    assert ai.draft_email({"stage": "New", "contact_email": float("nan")}).startswith("HOLD: No email")
+    assert ai.draft_email({"stage": "New", "contact_email": "  "}).startswith("HOLD: No email")
+    assert client.calls == []
+
+
+def test_check_bank_notes_are_held_in_code_not_left_to_the_model(fake):
+    client = fake([])
+    out = ai.draft_email({"stage": "Invoice sent", "contact_email": OK_EMAIL,
+                          "notes": "Invoice sent 17 Oct. Paid? Not marked. Check bank before chasing."})
+    assert out.startswith("HOLD:") and client.calls == []
+    # L07-style notes ask a question instead, so they still get a draft
+    client = fake(["Subject: ok"])
+    assert ai.draft_email({"stage": "Invoice sent", "contact_email": OK_EMAIL,
+                           "notes": "Invoice sent, waiting for payment. Ask whether the advance has come in."
+                           }) == "Subject: ok"
+
+
 def test_retry_once_with_two_second_backoff(fake):
     client = fake([RuntimeError("boom"), "Subject: ok"])
-    assert ai.draft_email({"stage": "Meeting"}) == "Subject: ok"
+    assert ai.draft_email({"stage": "Meeting", "contact_email": OK_EMAIL}) == "Subject: ok"
     assert len(client.calls) == 2 and client.sleeps == [2]
+
+
+def test_retry_goes_to_the_fallback_model(fake):
+    client = fake([RuntimeError("429"), "Subject: ok"])
+    ai.draft_email({"stage": "Meeting", "contact_email": OK_EMAIL})
+    assert [c["model"] for c in client.calls] == ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 
 
 def test_two_failures_return_friendly_fallback(fake):
     client = fake([RuntimeError("a"), RuntimeError("b")])
-    out = ai.draft_email({"stage": "Meeting"})
+    out = ai.draft_email({"stage": "Meeting", "contact_email": OK_EMAIL})
     assert out.startswith("[Draft unavailable]") and not out.startswith("HOLD:")
     assert len(client.calls) == 2 and client.sleeps == [2]
 
@@ -108,7 +139,7 @@ def test_missing_key_falls_back_without_retrying(monkeypatch):
     monkeypatch.setattr(ai, "_api_key", lambda: None)
     monkeypatch.setattr(ai, "_client", None)
     monkeypatch.setattr(ai.time, "sleep", lambda s: pytest.fail("must not back off"))
-    out = ai.draft_email({"stage": "Meeting"})
+    out = ai.draft_email({"stage": "Meeting", "contact_email": OK_EMAIL})
     assert "[Draft unavailable]" in out and "GROQ_API_KEY" in out
 
 
@@ -147,9 +178,42 @@ def test_answer_sum_is_computed_in_pandas_and_dedupes(fake, flagged):
     assert "response_format" not in writer
 
 
+# Spec change (deliberate): "chase first" = OVERDUE, non-duplicate deals ranked by deal value,
+# then days overdue. The old test ranked all open deals by days overdue, which put four BDT 0
+# deals ahead of the BDT 500,000 deal and disagreed with the weekly summary.
 def test_answer_rank_chase_first(fake, flagged):
-    res, _ = ask(fake, flagged, spec("rank", sort_by="days_overdue"))
-    assert ids(res) == ["L15", "L25", "L06", "L22", "L20"]  # days overdue, then value; open deals only
+    res, client = ask(fake, flagged, spec("rank", sort_by="days_overdue"))
+    assert ids(res) == CHASE_FIRST
+    assert str(res).startswith("5 overdue deals to chase first")
+    assert res["filters"]["overdue"] is True and res["filters"]["stage"] is None
+    caveats = res["table"].set_index("lead_id")["caveat"]
+    assert "verify payment" in caveats["L22"] and "date suspect" in caveats["L25"] and caveats["L10"] == ""
+    assert client.calls[1]["messages"][0]["content"] == ai.RANK_WRITER_SYSTEM_PROMPT
+    assert "verify payment" in client.calls[1]["messages"][1]["content"]   # caveat reaches the writer
+
+
+def test_rank_rows_are_chosen_by_code_not_by_the_parser(fake, flagged):
+    # whatever stages or sort the model guessed, the rows are the same
+    res, _ = ask(fake, flagged, spec("rank", stage=["Meeting", "Proposal"], sort_by="deal_value"))
+    assert ids(res) == CHASE_FIRST
+
+
+def test_chase_wording_forces_rank_even_if_parser_says_list_or_unsupported(fake, flagged):
+    for parsed in (spec("list", stage=["Meeting"]), spec("unsupported")):
+        res, _ = ask(fake, flagged, parsed, question="Which deals should I chase first?")
+        assert ids(res) == CHASE_FIRST
+
+
+def test_chase_first_still_works_when_the_parser_is_down(fake, flagged):
+    fake([RuntimeError("a"), RuntimeError("b"), "L10 ..."])
+    res = ai.answer_question("Which deals should I chase first?", flagged)
+    assert ids(res) == CHASE_FIRST and str(res).startswith("5 overdue deals")
+
+
+def test_chase_first_when_the_writer_is_down_keeps_the_header_and_table(fake, flagged):
+    fake([spec("rank"), RuntimeError("a"), RuntimeError("b")])
+    res = ai.answer_question("q", flagged)
+    assert str(res).startswith("5 overdue deals to chase first") and ids(res) == CHASE_FIRST
 
 
 def test_answer_overdue_missing_industry_and_value_filters(fake, flagged):
@@ -183,18 +247,30 @@ def test_answer_when_parser_fails_returns_fallback(fake, flagged):
 # ---------------------------------------------------------------- weekly summary
 def test_weekly_facts_are_computed_not_guessed(flagged):
     f = ai.build_weekly_facts(flagged)
-    assert [d["lead_id"] for d in f["top_overdue_by_value"]] == ["L10", "L22", "L19", "L15", "L25"]
-    assert f["top_overdue_by_value"][0]["deal_value_bdt"] == "BDT 500,000"
-    assert sorted(d["lead_id"] for d in f["proposal_and_invoice_sent"]) == ["L02", "L07", "L14", "L22"]
+    assert [d["lead_id"] for d in f["chase_first"]] == CHASE_FIRST   # same ranking as the Ask screen
+    assert f["chase_first"][0]["deal_value_bdt"] == "BDT 500,000"
+    caveats = {d["lead_id"]: d["caveat"] for d in f["chase_first"]}
+    assert "verify payment" in caveats["L22"] and "date suspect" in caveats["L25"] and caveats["L10"] == ""
+    assert f["overdue_total_count"] == 9
+    assert f["duplicate_inflation_bdt"] == "BDT 1,050,000"          # L03 (700k) + L23 (350k)
     assert [d["lead_id"] for d in f["going_cold"]] == ["L15", "L06", "L22"]
     types = {p["issue_type"]: p["lead_ids"] for p in f["hard_data_problems"]}
     assert types["date_order"] == ["L25"] and types["invalid_email"] == ["L18"]
     assert "L03" not in types["duplicate"] and "L23" not in types["duplicate"]
 
 
-def test_weekly_summary_calls_model_and_falls_back(fake, flagged):
+def test_weekly_summary_appends_a_data_problems_line_written_by_code(fake, flagged):
     client = fake(["1. L10 ..."])
-    assert ai.weekly_summary(flagged) == "1. L10 ..."
-    assert "150 words" in client.calls[0]["messages"][0]["content"]
+    out = ai.weekly_summary(flagged)
+    assert out.startswith("1. L10 ...")
+    assert "BDT 1,050,000" in out and "L03 duplicates L02" in out and "L23 duplicates L01" in out
+    assert "date-order error: L25" in out and "invalid email: L18" in out
+    assert "missing contact details: L06, L24" in out
+    system = client.calls[0]["messages"][0]["content"]
+    assert "150 words" in system and "unpaid" in system
+    assert "data_problems_line" not in client.calls[0]["messages"][1]["content"]   # model never sees it
+
+
+def test_weekly_summary_falls_back(fake, flagged):
     fake([RuntimeError("a"), RuntimeError("b")])
     assert "couldn't be generated" in ai.weekly_summary(flagged)
