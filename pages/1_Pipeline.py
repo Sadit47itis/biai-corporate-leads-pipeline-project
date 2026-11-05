@@ -6,6 +6,8 @@ import ui
 
 flagged, issues, clean = ui.get_data()
 
+ui.render_header()
+
 st.title("Pipeline")
 st.markdown(f'<div class="scorecard">{ui.esc(ui.scorecard_line(flagged, issues, clean))}</div>',
             unsafe_allow_html=True)

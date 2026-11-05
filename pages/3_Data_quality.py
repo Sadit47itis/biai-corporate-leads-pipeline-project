@@ -4,6 +4,8 @@ import streamlit as st
 import engine
 import ui
 
+ui.render_header()
+
 flagged, issues, clean = ui.get_data()
 today = pd.Timestamp(ui.get_today())
 company = flagged.set_index("lead_id")["company"]

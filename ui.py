@@ -10,6 +10,24 @@ import streamlit as st
 
 import engine
 
+def render_header():
+    """Renders the global app header across all pages."""
+    st.markdown(
+        """
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 10px;">
+            <div>
+                <h1 style="margin: 0; padding: 0; font-size: 2.2rem;">BIAI Corporate Leads Pipeline</h1>
+                <p style="margin: 0; color: gray; font-size: 1.1rem;">Created by <b>Sadit Arshad Sakib</b> </p>
+            </div>
+            <div style="text-align: right; color: gray; font-size: 0.95rem;">
+                <p style="margin: 0;">📞 +8801962412833</p>
+                <p style="margin: 0;">✉️ sadit.arshad@gmail.com</p>
+            </div>
+        </div>
+        <hr style="margin-top: 0; margin-bottom: 20px;">
+        """,
+        unsafe_allow_html=True
+    )
 # --------------------------------------------------------------------------
 # Palette (one place, used by CSS, badges and stage colours)
 # --------------------------------------------------------------------------

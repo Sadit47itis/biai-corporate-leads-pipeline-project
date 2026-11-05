@@ -14,6 +14,7 @@ st.session_state.setdefault("selected_lead", ids[0])
 st.session_state.setdefault("drafts", {})
 st.session_state.setdefault("reviewed", set())
 
+ui.render_header()
 st.title("Lead detail")
 
 

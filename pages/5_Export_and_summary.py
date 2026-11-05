@@ -34,6 +34,7 @@ def build_xlsx() -> bytes:
                 ws.column_dimensions[col_cells[0].column_letter].width = min(max(10, longest + 2), 60)
     return buf.getvalue()
 
+ui.render_header()
 
 st.title("Export & weekly summary")
 

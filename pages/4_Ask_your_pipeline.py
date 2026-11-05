@@ -8,6 +8,8 @@ flagged, issues, clean = ui.get_data()
 st.session_state.setdefault("chat", [])
 st.session_state.setdefault("pending_q", None)
 
+ui.render_header()
+
 st.title("Ask your pipeline")
 st.caption("Ask a question about the leads. The AI uses the rules engine for the math, "
            "and writes the answer in plain English.")
